@@ -1,0 +1,881 @@
+---
+title: "Báo cáo B2B phòng Triển khai"
+format:
+  html:
+    page-layout: full
+css: styles.css
+date: '`r format(Sys.Date(), "%d/%m/%Y")`'
+---
+
+<style type="text/css">
+  body{
+  font-size: 13pt;
+  font-family: Serif
+}
+</style>
+
+<style type="text/css">
+.main-container {
+  max-width: 80% !important;
+  margin: auto;
+}
+</style>
+
+```{r, warning=FALSE, message=FALSE, results = 'hide', echo = FALSE}
+#library(plyr)
+library(dplyr)
+library(ggplot2)
+library(repr)
+library(dplyr)
+library(DT)
+library(highcharter)
+library(shiny)
+#library(shinydashboard)
+library(tidyr)
+library(stringr)
+library(dplyr)
+library(tidyverse)
+library(formattable)
+library(scales)
+library(crosstalk)
+library(reactable)
+library(stringi)
+library(raster)
+#library(rgdal)
+library(ggthemes)
+library(ggiraph)
+library(googlesheets4)
+library(shinydashboard)
+library(shinyWidgets)
+
+writeLines(
+  paste0('{"buildTime": "', format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ"), '"}'),
+  "last-build.json"
+)
+
+thang_n <- format(Sys.Date(), "%m/%Y")
+```
+
+
+```{r, warning=FALSE, message=FALSE, results = 'hide', echo = FALSE}
+if (Sys.getenv("GCP_SERVICE_ACCOUNT") != "") {
+  # Chạy trên GitHub Actions → dùng Service Account
+  gs4_auth(path = Sys.getenv("GCP_SERVICE_ACCOUNT"))
+} else {
+  # Chạy local → đăng nhập thủ công
+  gs4_auth()
+}
+sheet_url <- "https://docs.google.com/spreadsheets/d/1ouKtO7yfM599u87xjpurXVQrdkCYARRGjyZeNq56pOQ/edit?gid=1003145783#gid=1003145783"
+b2b_tong <- read_sheet(sheet_url, sheet = "Du_an")
+b2b_GD <- read_sheet(sheet_url, sheet = "Data_giai_doan")
+ma_tinh <- read_sheet(sheet_url, sheet = "Ma_tinh")
+b2b_tong <- left_join(b2b_tong, ma_tinh, by = "Tinh_tp")
+b2b_GD <- left_join(b2b_GD, ma_tinh, by = "Tinh_tp")
+b2b_tong %>%
+  mutate(Tinh_tp = ma_moi) -> b2b_tong
+b2b_GD %>%
+  mutate(Tinh_tp = ma_moi) -> b2b_GD
+
+am <- read_sheet(sheet_url, sheet = "AM")
+
+b2b_tong %>%
+  mutate(Nguon_viec_ton = Nguon_viec_ton + Gia_quyet_toan_truoc_vat) -> b2b_tong
+```
+
+
+## <span style="color: #C35817;font-family: cambria;">**I. DỰ KIẾN LÊN DOANH THU NGUỒN VIỆC TỒN**</span>
+### <span style="color: #C35817;font-family: cambria;">**1. Tổng quan**</span>
+
+```{r,out.width = '150%', echo = FALSE, warning=FALSE, message=FALSE}
+# =====================================================================
+#  Bảng reactable tổng hợp b2b_GD – bộ lọc liên động (cascading)
+#  Chạy được trong RStudio (Viewer) và trong chunk {r} của Quarto.
+#  Không cần Shiny -> dùng được cho site tĩnh (Netlify).
+# =====================================================================
+library(dplyr)
+library(reactable)
+library(crosstalk)
+library(htmltools)
+
+# ---------------------------------------------------------------------
+# 1. Chuẩn bị dữ liệu
+# ---------------------------------------------------------------------
+goc <- b2b_GD %>%
+  dplyr::mutate(
+    .key = as.character(dplyr::row_number()),   # khóa chung cho 2 bảng
+    # Tinh_tp đã là mã tỉnh (HNI, BNH...) -> dùng trực tiếp
+    Ma_tinh = toupper(trimws(as.character(Tinh_tp))),
+    Tinh_tp = Ma_tinh,
+
+    HD = as.character(HD),
+
+    # Tháng tính DT: nếu là Date thì đổi sang "MM/YYYY"
+    Thang_tinh_doanh_thu = if (inherits(Thang_tinh_doanh_thu, "Date"))
+      format(Thang_tinh_doanh_thu, "%m/%Y") else as.character(Thang_tinh_doanh_thu),
+    Thang_tinh_doanh_thu = dplyr::na_if(trimws(Thang_tinh_doanh_thu), ""),
+
+    # Cột dùng riêng cho bộ lọc (dòng chưa lên DT vẫn lọc được)
+    Thang_loc = dplyr::coalesce(Thang_tinh_doanh_thu, "(Chưa lên DT)"),
+
+    # Các cột lọc khác: NA -> nhãn rõ ràng
+    AM                  = dplyr::coalesce(as.character(AM), "(Trống)"),
+    Tinh_tp             = dplyr::coalesce(as.character(Tinh_tp), "(Trống)"),
+    Ma_tinh             = dplyr::coalesce(Ma_tinh, "(Trống)"),
+    Ke_hoach_doanh_thu  = dplyr::coalesce(as.character(Ke_hoach_doanh_thu), "(Trống)"),
+    Tinh_kha_thi        = dplyr::coalesce(as.character(Tinh_kha_thi), "(Trống)"),
+
+    # Giá trị tiền: NA -> 0 để tổng không bị lỗi
+    Gia_tri_du_kien_doanh_thu = dplyr::coalesce(as.numeric(Gia_tri_du_kien_doanh_thu), 0),
+    Gia_quyet_toan_truoc_vat  = dplyr::coalesce(as.numeric(Gia_quyet_toan_truoc_vat), 0)
+  )
+
+# Dữ liệu bảng tổng hợp
+df <- goc %>%
+  dplyr::select(.key, AM, Ma_tinh, HD, Gia_tri_du_kien_doanh_thu,
+         Thang_tinh_doanh_thu, Gia_quyet_toan_truoc_vat,
+         # cột chỉ để lọc (ẩn trên bảng)
+         Tinh_tp, Ke_hoach_doanh_thu, Thang_loc, Tinh_kha_thi)
+
+# Dữ liệu bảng chi tiết hợp đồng
+df_ct <- goc %>%
+  dplyr::select(.key, AM, GD, Tinh_tp, HD, Khac_hang, Vuong,
+         Noi_dung_vuong_chi_tiet, Nguon_viec_ton, Ke_hoach_doanh_thu,
+         Gia_tri_du_kien_doanh_thu, Thang_tinh_doanh_thu, Tinh_kha_thi,
+         Gia_quyet_toan_truoc_vat, Thang_loc)
+
+# Cùng group + cùng key -> 1 bộ lọc điều khiển cả 2 bảng
+sd    <- SharedData$new(df,    key = ~.key, group = "b2b_gd")
+sd_ct <- SharedData$new(df_ct, key = ~.key, group = "b2b_gd")
+
+# ---------------------------------------------------------------------
+# 2. Bộ lọc
+# ---------------------------------------------------------------------
+loc <- function(id, label, col) {
+  filter_select(id, label, sd, col, multiple = TRUE)
+}
+
+bo_loc <- div(
+  style = "display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;",
+  loc("f_am",    "AM",              ~AM),
+  loc("f_tinh",  "Tỉnh/TP",         ~Tinh_tp),
+  loc("f_kh",    "Kế hoạch DT",     ~Ke_hoach_doanh_thu),
+  loc("f_thang", "Tháng tính DT",   ~Thang_loc),
+  loc("f_kt",    "Tính khả thi",    ~Tinh_kha_thi)
+)
+
+# ---------------------------------------------------------------------
+# 3. Bảng reactable (group by AM -> Mã tỉnh)
+# ---------------------------------------------------------------------
+# Đếm giá trị không rỗng (dùng cho Số HĐ và Số HĐ đã lên DT)
+dem_khong_rong <- JS("function(values) {
+  return values.filter(function(v) { return v !== null && v !== undefined && v !== ''; }).length;
+}")
+
+fmt_tien <- colFormat(separators = TRUE, digits = 0, locales = "vi-VN")
+
+# Hàng tổng: tính trên dữ liệu đang lọc (lấy các dòng chi tiết ở cấp cuối)
+tong_js <- function(kieu) {
+  JS(sprintf("function(column, state) {
+    function leaves(rows, out) {
+      rows.forEach(function(r) {
+        if (r._subRows && r._subRows.length) leaves(r._subRows, out);
+        else out.push(r);
+      });
+      return out;
+    }
+    var vals = leaves(state.sortedData, []).map(function(r) { return r[column.id]; });
+    var kq = '%s' === 'dem'
+      ? vals.filter(function(v) { return v !== null && v !== undefined && v !== ''; }).length
+      : vals.reduce(function(a, v) { return a + (Number(v) || 0); }, 0);
+    return kq.toLocaleString('vi-VN', { maximumFractionDigits: 0 });
+  }", kieu))
+}
+
+bang <- reactable(
+  sd,
+  groupBy = c("AM", "Ma_tinh"),
+  defaultSorted = list(Gia_tri_du_kien_doanh_thu = "desc"),
+  columns = list(
+    AM      = colDef(name = "AM", minWidth = 160, footer = "Tổng"),
+    Ma_tinh = colDef(
+      name = "Mã tỉnh", minWidth = 110, class = "cot-ma-tinh",
+      # Chỉ hiện mã tỉnh, bỏ số "(286)"
+      grouped = JS("function(cellInfo) { return cellInfo.value; }")
+    ),
+    HD = colDef(
+      name = "Số HĐ dự kiến", align = "right",
+      aggregate = dem_khong_rong, footer = tong_js("dem")
+    ),
+    Gia_tri_du_kien_doanh_thu = colDef(
+      name = "Giá trị HĐ dự kiến", aggregate = "sum",
+      format = fmt_tien, minWidth = 150, footer = tong_js("tong")
+    ),
+    Thang_tinh_doanh_thu = colDef(
+      name = "Số HĐ đã lên DT", align = "right",
+      aggregate = dem_khong_rong, footer = tong_js("dem")
+    ),
+    Gia_quyet_toan_truoc_vat = colDef(
+      name = "Giá trị QT CĐT", aggregate = "sum",
+      format = fmt_tien, minWidth = 150, footer = tong_js("tong")
+    ),
+    # Cột chỉ để lọc
+    .key               = colDef(show = FALSE),
+    Tinh_tp            = colDef(show = FALSE),
+    Ke_hoach_doanh_thu = colDef(show = FALSE),
+    Thang_loc          = colDef(show = FALSE),
+    Tinh_kha_thi       = colDef(show = FALSE)
+  ),
+  # Ẩn dòng chi tiết HĐ (cấp 3) -> Mã tỉnh là cấp cuối cùng
+  rowClass = JS("function(rowInfo) { return rowInfo.level >= 2 ? 'an-chi-tiet' : null; }"),
+  bordered = TRUE, striped = TRUE, highlight = TRUE, compact = TRUE,
+  defaultPageSize = 12, showPageSizeOptions = TRUE,
+  # Chỉ hàng group AM in đậm; hàng Mã tỉnh sổ ra để chữ thường
+  rowStyle = JS("function(rowInfo) {
+    if (rowInfo.level === 0) return { fontWeight: 700 };
+    return { fontWeight: 400 };
+  }"),
+  theme = reactableTheme(
+    headerStyle = list(background = "#f3f6fa", fontWeight = 600),
+    # Di chuột qua -> bôi cam cả hàng
+    rowHighlightStyle = list(background = "#fde4cc"),
+    # Hàng tổng: nền vàng nhạt, chữ đỏ, in đậm
+    footerStyle = list(background = "#fff4c2", color = "#c00000", fontWeight = 700)
+  ),
+  class = "bang-b2b"
+)
+
+# ---------------------------------------------------------------------
+# 3b. Bảng chi tiết hợp đồng (group by AM -> Tinh_tp, sổ ra từng HĐ)
+# ---------------------------------------------------------------------
+bang_ct <- reactable(
+  sd_ct, height = 460,          # khoảng 12 hàng, tùy cỡ chữ
+pagination = FALSE,
+  groupBy = c("AM", "Tinh_tp"),
+  defaultSorted = list(Gia_tri_du_kien_doanh_thu = "desc"),
+  columns = list(
+    AM      = colDef(name = "AM", minWidth = 150, footer = "Tổng"),
+    Tinh_tp = colDef(name = "Tỉnh/TP", minWidth = 100),
+    GD      = colDef(name = "GD", minWidth = 100),
+    HD      = colDef(name = "Hợp đồng", minWidth = 180,
+                     aggregate = dem_khong_rong, footer = tong_js("dem")),
+    Khac_hang = colDef(name = "Khách hàng", minWidth = 180),
+    Vuong     = colDef(name = "Vướng", minWidth = 90),
+    Noi_dung_vuong_chi_tiet = colDef(name = "Nội dung vướng chi tiết", minWidth = 260),
+    Nguon_viec_ton     = colDef(name = "Nguồn việc tồn", aggregate = "sum", format = fmt_tien, minWidth = 130),
+    Ke_hoach_doanh_thu = colDef(name = "Kế hoạch DT", minWidth = 110),
+    Gia_tri_du_kien_doanh_thu = colDef(
+      name = "Giá trị HĐ dự kiến", aggregate = "sum",
+      format = fmt_tien, minWidth = 150, footer = tong_js("tong")
+    ),
+    Thang_tinh_doanh_thu = colDef(
+      name = "Tháng tính DT", align = "right", minWidth = 110,
+      aggregate = dem_khong_rong, footer = tong_js("dem")
+    ),
+    Tinh_kha_thi = colDef(name = "Tính khả thi", minWidth = 110),
+    Gia_quyet_toan_truoc_vat = colDef(
+      name = "Giá trị QT CĐT", aggregate = "sum",
+      format = fmt_tien, minWidth = 150, footer = tong_js("tong")
+    ),
+    .key      = colDef(show = FALSE),
+    Thang_loc = colDef(show = FALSE)
+  ),
+  bordered = TRUE, striped = TRUE, highlight = TRUE, compact = TRUE,
+  wrap = TRUE, resizable = TRUE,
+  defaultPageSize = 20, showPageSizeOptions = TRUE,
+  # Hàng group (AM, Tỉnh/TP) in đậm; hàng hợp đồng chữ thường
+  rowStyle = JS("function(rowInfo) {
+    return { fontWeight: rowInfo.aggregated ? 700 : 400 };
+  }"),
+  theme = reactableTheme(
+    headerStyle = list(background = "#f3f6fa", fontWeight = 600),
+    rowHighlightStyle = list(background = "#fde4cc"),
+    footerStyle = list(background = "#fff4c2", color = "#c00000", fontWeight = 700)
+  ),
+  class = "bang-b2b"
+)
+
+# ---------------------------------------------------------------------
+# 4. JS: bộ lọc liên động
+#    Chọn 1 bộ lọc -> các bộ lọc khác chỉ còn những giá trị
+#    có dữ liệu tương ứng.
+# ---------------------------------------------------------------------
+js_lien_dong <- HTML("
+(function () {
+  var ids = ['f_am', 'f_tinh', 'f_kh', 'f_thang', 'f_kt'];
+  var F = {};
+
+  function arr(x) { return Array.isArray(x) ? x : [x]; }
+
+  function init() {
+    for (var i = 0; i < ids.length; i++) {
+      var id = ids[i];
+      var el = document.getElementById(id);
+      var sel = el && el.querySelector('select');
+      var cfgTag = document.querySelector('script[data-for=\"' + id + '\"]');
+      if (!sel || !sel.selectize || !cfgTag) { setTimeout(init, 200); return; }
+
+      var cfg = JSON.parse(cfgTag.textContent);
+      var map = {};
+      Object.keys(cfg.map).forEach(function (v) {
+        map[v] = new Set(arr(cfg.map[v]).map(String));
+      });
+      var vals = arr(cfg.items.value), labs = arr(cfg.items.label);
+      F[id] = {
+        s: sel.selectize,
+        map: map,
+        all: vals.map(function (v, j) { return { value: String(v), label: String(labs[j]) }; })
+      };
+    }
+    ids.forEach(function (id) { F[id].s.on('change', capNhat); });
+  }
+
+  // Tập key (dòng) của 1 bộ lọc đang chọn; null = chưa chọn gì
+  function keysOf(id) {
+    var v = F[id].s.getValue();
+    if (!v || !v.length) return null;
+    var u = new Set();
+    arr(v).forEach(function (x) { (F[id].map[x] || new Set()).forEach(function (k) { u.add(k); }); });
+    return u;
+  }
+
+  function capNhat() {
+    var K = {};
+    ids.forEach(function (id) { K[id] = keysOf(id); });
+
+    ids.forEach(function (id) {
+      // Giao các bộ lọc KHÁC đang chọn
+      var allowed = null;
+      ids.forEach(function (o) {
+        if (o === id || !K[o]) return;
+        if (!allowed) { allowed = new Set(K[o]); return; }
+        allowed = new Set(Array.from(allowed).filter(function (k) { return K[o].has(k); }));
+      });
+
+      var f = F[id], s = f.s;
+      var selected = new Set(arr(s.getValue() || []));
+      f.all.forEach(function (opt, idx) {
+        var keys = f.map[opt.value] || new Set();
+        var ok = !allowed || Array.from(keys).some(function (k) { return allowed.has(k); });
+        var has = Object.prototype.hasOwnProperty.call(s.options, opt.value);
+        if (ok && !has) {
+          s.addOption({ value: opt.value, label: opt.label, $order: idx });
+        } else if (!ok && has && !selected.has(opt.value)) {
+          s.removeOption(opt.value, true);
+        }
+      });
+      s.settings.sortField = '$order';
+      s.refreshOptions(false);
+    });
+  }
+
+  if (document.readyState === 'complete') init();
+  else window.addEventListener('load', init);
+})();
+")
+
+# ---------------------------------------------------------------------
+# 5. Xuất
+# ---------------------------------------------------------------------
+css_bang <- tags$style(HTML("
+  .an-chi-tiet { display: none !important; }
+  .cot-ma-tinh .rt-expander { display: none; }
+  .cot-ma-tinh.rt-td-expandable { cursor: default; }
+
+  /* Đưa hàng tổng (footer) lên ngay dưới tiêu đề */
+  .bang-b2b .rt-table { display: flex; flex-direction: column; }
+  .bang-b2b .rt-thead { order: 0; }
+  .bang-b2b .rt-tfoot { order: 1; border-bottom: 2px solid #e0c97a; }
+  .bang-b2b .rt-tbody { order: 2; }
+  .bang-b2b .rt-tfoot .rt-td { border-top: none; }
+"))
+
+browsable(tagList(
+  css_bang,
+  bo_loc,
+  tags$div(style = "height:12px"),
+  bang,
+  tags$h4("Chi tiết hợp đồng", style = "margin:24px 0 8px;"),
+  bang_ct,
+  tags$script(js_lien_dong)
+))
+```
+
+
+### <span style="color: #C35817;font-family: cambria;">**2. Tỷ lệ dự kiến tháng ** <strong>`r thang_n`</strong></span>
+
+```{r, warning=FALSE, message=FALSE, results = 'hide', echo = FALSE}
+b2b_tong %>%
+  group_by(Tinh_tp, AM) %>%
+  summarise(gtri_hd = round(sum(Nguon_viec_ton[!is.na(HD)], na.rm = TRUE)/10^6,0),
+            so_hd_ton = sum(!is.na(HD) & Nguon_viec_ton > 0, na.rm = TRUE)) -> bc_ton
+
+b2b_GD %>%
+  group_by(Tinh_tp, AM) %>%
+  summarise(gtri_dk = round(sum(Gia_tri_du_kien_doanh_thu[!is.na(HD)  & Ke_hoach_doanh_thu == thang_n], na.rm = TRUE)/10^6,0),
+            so_hd_dk = sum(!is.na(HD) & Ke_hoach_doanh_thu == thang_n, na.rm = TRUE)) -> bc_dk
+
+bc_dk <- left_join(bc_ton, bc_dk, by = c("Tinh_tp", "AM"))
+
+bc_dk %>% 
+  mutate(ty_le = gtri_dk*100/gtri_hd) -> bc_dk
+
+```
+
+
+```{r,out.width = '120%',fig.width=7, fig.height=4, echo = FALSE, warning=FALSE, message=FALSE}
+library(dplyr)
+library(jsonlite)
+library(highcharter)
+library(htmlwidgets)
+
+thu_tu_am <- bc_dk %>%
+  group_by(AM) %>%
+  summarise(tong = sum(gtri_hd, na.rm = TRUE)) %>%
+  arrange(desc(tong)) %>%
+  pull(AM)
+
+bc_dk$AM <- factor(bc_dk$AM, levels = thu_tu_am)
+bc_dk    <- bc_dk %>% arrange(AM, Tinh_tp)
+
+n_total   <- nrow(bc_dk)
+
+am_groups <- bc_dk %>%
+  mutate(idx = row_number() - 1) %>%
+  group_by(AM) %>%
+  summarise(n_cols = n(), .groups = "drop")
+
+am_groups_json <- toJSON(
+  list(am     = as.character(am_groups$AM),
+       n_cols = am_groups$n_cols),
+  auto_unbox = TRUE
+)
+
+hc <- highchart() %>% 
+  hc_chart(type = "column") %>%
+  hc_xAxis(categories = bc_dk$Tinh_tp, labels = list(style=list(fontSize = "12px",fontFamily = "cambria")),
+           crosshair = list(
+    width = 40,              # độ rộng vùng highlight
+    color = "rgba(180,180,180,0.2)",  # màu xám nhạt trong suốt
+    zIndex = 0              # nằm dưới các bar
+  )) %>%
+  hc_title(text = "Tỷ lệ dự kiến doanh thu tháng hiện tại",
+           margin = 20, 
+           align = "center",
+           style = list(color = "black", fontWeight = "bold",fontFamily = "cambria",fontSize = "20px")
+           ) %>% 
+  hc_plotOptions(
+  column = list(
+    states = list(
+      hover = list(
+        color = NULL  # để override màu theo từng series
+      ),
+      inactive = list(
+        opacity = 0.3
+      )
+    )
+  ),
+  series = list(
+    states = list(
+      inactive = list(
+        opacity = 0.3
+      )
+    )
+  )
+) %>%
+  hc_yAxis_multiples(list(lineWidth = 3, 
+                          title = list(text = "Dự kiến DT", style=list(fontWeight = "bold",fontSize = "15px",fontFamily = "cambria")), 
+                          labels = list(style=list(fontSize = "12px",fontFamily = "cambria"))),
+                     list(showLastLabel = TRUE, opposite = TRUE, 
+                          title = list(text = "%HT", style=list(fontWeight = "bold",fontSize = "15px",fontFamily = "cambria")), 
+                          labels = list(style=list(fontSize = "12px",fontFamily = "cambria")))) %>%
+  hc_add_series(name = "Tổng NV tồn", 
+                data = lapply(seq_along(bc_dk$gtri_hd), function(i) {
+      list(y = round(bc_dk$gtri_hd[i], 0),
+           so_hd_ton = bc_dk$so_hd_ton[i])
+    }),
+                states = list(
+      hover = list(color = "#808080")  # trắng khi hover
+    ),
+                tooltip = list(columnFormat = paste0("Kế hoạch", "\n",accounting(bc_dk$gtri_hd, big.mark = ",", digits = 2L, format = "d"), "TTQH"))) %>%
+  hc_add_series(name = paste0("DK DT tháng ", thang_n),
+                data = lapply(seq_along(bc_dk$gtri_dk), function(i) {
+      list(y = round(bc_dk$gtri_dk[i], 0),
+           so_hd_dk = bc_dk$so_hd_dk[i])
+    }),
+                states = list(
+      hover = list(color = "#8DB600")  # xanh lá mạ khi hover
+    )) %>%
+  hc_add_series(name = "Tỷ lệ (%)",data = round(bc_dk$ty_le,0), type = "spline", yAxis = 1,dataLabels = list(enabled = TRUE, format = "{y}%")) %>%
+  hc_tooltip(
+    shared = TRUE,
+    useHTML = TRUE,
+    # ✅ Bọc toàn bộ JS() bằng paste0() để R điền thang_n vào trước khi render
+    formatter = JS(paste0("
+      function() {
+        var s = '<b>' + this.x + '</b><br/>';
+
+        var gtri_hd = 0, gtri_dk = 0, ty_le = 0, so_hd_ton = 0, so_hd_dk = 0;
+
+        for (var i = 0; i < this.points.length; i++) {
+          var name = this.points[i].series.name;
+          var pt   = this.points[i].point;
+          var val  = this.points[i].y;
+
+          if (name === 'Tổng NV tồn')              { gtri_hd  = val; so_hd_ton = pt.so_hd_ton; }
+          if (name === 'DK DT tháng ", thang_n, "') { gtri_dk = val; so_hd_dk    = pt.so_hd_dk; }
+          if (name === 'Tỷ lệ (%)')                   ty_le    = val;
+        }
+
+        s += '<span style=\"color:#D9D9D9\">●</span> Tổng NV tồn: <b>' + 
+               Highcharts.numberFormat(gtri_hd, 0, '.', ',') + 
+             '</b> ~ Số HĐ tồn: <b>' + so_hd_ton + '</b><br/>';
+
+        s += '<span style=\"color:#C84309\">●</span> DK DT tháng ", thang_n, ": <b>' + 
+               Highcharts.numberFormat(gtri_dk, 0, '.', ',') + 
+             '</b> ~ Số HĐ DK: <b>' + so_hd_dk + '</b><br/>';
+
+        s += '<span style=\"color:#645889\">●</span> Tỷ lệ (%): <b>' + ty_le + '</b>';
+
+        return s;
+      }
+    "))
+  ) %>%
+  hc_colors(c("#D9D9D9", "#C84309","#645889")) %>%
+  hc_legend(labels = list(style = list(color = "black", fontWeight = "bold",fontFamily = "cambria",fontSize = "20px"))) %>%
+  hc_exporting(
+    enabled = TRUE,
+    filename = "custom-file-name"
+    )
+
+onRender(hc, paste0("
+function(el, x) {
+  var groups  = ", am_groups_json, ";
+  var N       = ", n_total, ";
+  var nGroups = groups.am.length;
+
+  function tryDraw() {
+    /* Lấy chart qua container ID — không dùng Highcharts.charts index */
+    var container = el.querySelector('.highcharts-container');
+    if (!container) { setTimeout(tryDraw, 200); return; }
+
+    var chart = null;
+    for (var i = 0; i < Highcharts.charts.length; i++) {
+      var c = Highcharts.charts[i];
+      if (c && c.renderTo && el.contains(c.renderTo)) {
+        chart = c;
+        break;
+      }
+    }
+    if (!chart || !chart.plotWidth || chart.plotWidth === 0) {
+      setTimeout(tryDraw, 200); return;
+    }
+
+    var pLeft  = chart.plotLeft;
+    var pRight = chart.chartWidth - pLeft - chart.plotWidth;
+    var colW   = chart.plotWidth / N;
+    var pullUp = chart.marginBottom - 25;
+
+    el.style.position = 'relative';
+
+    /* Xóa element cũ nếu re-render */
+    var old = el.querySelectorAll('._am_sep, ._am_row');
+    old.forEach(function(o) { o.parentNode.removeChild(o); });
+
+    /* Đường dọc nét đứt */
+    var cumCols = 0;
+    for (var i = 0; i < nGroups - 1; i++) {
+      cumCols += groups.n_cols[i];
+      var sepX = pLeft + cumCols * colW;
+      var sep  = document.createElement('div');
+      sep.className = '_am_sep';
+      sep.style.cssText = [
+        'position:absolute',
+        'left:'   + Math.round(sepX) + 'px',
+        'top:'    + chart.plotTop + 'px',
+        'width:1px',
+        'height:' + (chart.plotHeight + 18) + 'px',
+        'border-left:1px dashed #999999',
+        'pointer-events:none',
+        'z-index:3'
+      ].join(';');
+      el.appendChild(sep);
+    }
+
+    /* Flex row label AM */
+    var row = document.createElement('div');
+    row.className = '_am_row';
+    row.style.cssText = [
+      'display:flex',
+      'margin-top:-' + pullUp + 'px',
+      'padding-left:' + pLeft + 'px',
+      'padding-right:' + pRight + 'px',
+      'width:' + chart.chartWidth + 'px',
+      'box-sizing:border-box',
+      'pointer-events:none'
+    ].join(';');
+
+    for (var j = 0; j < nGroups; j++) {
+      var cell = document.createElement('div');
+      cell.textContent = groups.am[j];
+      cell.style.cssText = [
+        'flex:' + groups.n_cols[j],
+        'text-align:center',
+        'font-size:12px',
+        'font-family:Cambria,serif',
+        'font-weight:bold',
+        'color:#333333',
+        'border-top:2px solid #555555',
+        'padding-top:4px'
+      ].join(';');
+      row.appendChild(cell);
+    }
+    el.appendChild(row);
+  }
+
+  /* Thử nhiều lần với delay tăng dần — đảm bảo chạy cả Netlify */
+  setTimeout(tryDraw, 300);
+  setTimeout(tryDraw, 800);
+  setTimeout(tryDraw, 1500);
+}
+"))
+
+```
+
+### <span style="color: #C35817;font-family: cambria;">**3. Đã quyết toán tháng ** <strong>`r thang_n`</strong></span>
+
+```{r, warning=FALSE, message=FALSE, results = 'hide', echo = FALSE}
+thang_n <- format(Sys.Date(), "%m/%Y")
+
+b2b_GD %>%
+  group_by(Tinh_tp, AM) %>%
+  summarise(gtri_dk = round(sum(Gia_tri_du_kien_doanh_thu[!is.na(HD)  & Ke_hoach_doanh_thu == thang_n], na.rm = TRUE)/10^6,0),
+            so_hd_dk = sum(!is.na(HD) & Ke_hoach_doanh_thu == thang_n, na.rm = TRUE),
+            gtri_dt = round(sum(Gia_quyet_toan_truoc_vat[!is.na(HD)  & Thang_tinh_doanh_thu == thang_n], na.rm = TRUE)/10^6,0),
+            so_hd_dt = sum(!is.na(HD) & Thang_tinh_doanh_thu == thang_n, na.rm = TRUE)) -> bc_dt
+
+bc_dt %>% 
+  mutate(ty_le = gtri_dt*100/gtri_dk) -> bc_dt
+
+```
+
+
+```{r,out.width = '120%',fig.width=7, fig.height=4, echo = FALSE, warning=FALSE, message=FALSE}
+library(dplyr)
+library(jsonlite)
+library(highcharter)
+library(htmlwidgets)
+
+thu_tu_am <- bc_dt %>%
+  group_by(AM) %>%
+  summarise(tong = sum(gtri_dk, na.rm = TRUE)) %>%
+  arrange(desc(tong)) %>%
+  pull(AM)
+
+bc_dt$AM <- factor(bc_dt$AM, levels = thu_tu_am)
+bc_dt    <- bc_dt %>% arrange(AM, Tinh_tp)
+
+n_total   <- nrow(bc_dt)
+
+am_groups <- bc_dt %>%
+  mutate(idx = row_number() - 1) %>%
+  group_by(AM) %>%
+  summarise(n_cols = n(), .groups = "drop")
+
+am_groups_json <- toJSON(
+  list(am     = as.character(am_groups$AM),
+       n_cols = am_groups$n_cols),
+  auto_unbox = TRUE
+)
+
+hc <- highchart() %>% 
+  hc_chart(type = "column") %>%
+  hc_xAxis(categories = bc_dt$Tinh_tp, labels = list(style=list(fontSize = "12px",fontFamily = "cambria")),
+           crosshair = list(
+    width = 40,              # độ rộng vùng highlight
+    color = "rgba(180,180,180,0.2)",  # màu xám nhạt trong suốt
+    zIndex = 0              # nằm dưới các bar
+  )) %>%
+  hc_title(text = "Tỷ lệ quyết toán tháng hiện tại",
+           margin = 20, 
+           align = "center",
+           style = list(color = "black", fontWeight = "bold",fontFamily = "cambria",fontSize = "20px")
+           ) %>% 
+  hc_plotOptions(
+  column = list(
+    states = list(
+      hover = list(
+        color = NULL  # để override màu theo từng series
+      ),
+      inactive = list(
+        opacity = 0.3
+      )
+    )
+  ),
+  series = list(
+    states = list(
+      inactive = list(
+        opacity = 0.3
+      )
+    )
+  )
+) %>%
+  hc_yAxis_multiples(list(lineWidth = 3, 
+                          title = list(text = "Dự kiến DT", style=list(fontWeight = "bold",fontSize = "15px",fontFamily = "cambria")), 
+                          labels = list(style=list(fontSize = "12px",fontFamily = "cambria"))),
+                     list(showLastLabel = TRUE, opposite = TRUE, 
+                          title = list(text = "%HT", style=list(fontWeight = "bold",fontSize = "15px",fontFamily = "cambria")), 
+                          labels = list(style=list(fontSize = "12px",fontFamily = "cambria")))) %>%
+  hc_add_series(name = "Tổng DK", 
+                data = lapply(seq_along(bc_dt$gtri_dk), function(i) {
+      list(y = round(bc_dt$gtri_dk[i], 0),
+           so_hd_ton = bc_dt$so_hd_dk[i])
+    }),
+                states = list(
+      hover = list(color = "#808080")  # trắng khi hover
+    ),
+                tooltip = list(columnFormat = paste0("Kế hoạch", "\n",accounting(bc_dt$gtri_dk, big.mark = ",", digits = 2L, format = "d"), "TTQH"))) %>%
+  hc_add_series(name = paste0("QT tháng ", thang_n),
+                data = lapply(seq_along(bc_dt$gtri_dt), function(i) {
+      list(y = round(bc_dt$gtri_dt[i], 0),
+           so_hd_dk = bc_dt$so_hd_dt[i])
+    }),
+                states = list(
+      hover = list(color = "#8DB600")  # xanh lá mạ khi hover
+    )) %>%
+  hc_add_series(name = "Tỷ lệ (%)",data = round(bc_dt$ty_le,0), type = "spline", yAxis = 1,dataLabels = list(enabled = TRUE, format = "{y}%")) %>%
+  hc_tooltip(
+    shared = TRUE,
+    useHTML = TRUE,
+    # ✅ Bọc toàn bộ JS() bằng paste0() để R điền thang_n vào trước khi render
+    formatter = JS(paste0("
+      function() {
+        var s = '<b>' + this.x + '</b><br/>';
+
+        var gtri_dk = 0, gtri_dt = 0, ty_le = 0, so_hd_dk = 0, so_hd_dt = 0;
+
+        for (var i = 0; i < this.points.length; i++) {
+          var name = this.points[i].series.name;
+          var pt   = this.points[i].point;
+          var val  = this.points[i].y;
+
+          if (name === 'Tổng dự kiến')              { gtri_dk  = val; so_hd_dk = pt.so_hd_dk; }
+          if (name === 'QT tháng ", thang_n, "') { gtri_dt = val; so_hd_dt    = pt.so_hd_dt; }
+          if (name === 'Tỷ lệ (%)')                   ty_le    = val;
+        }
+
+        s += '<span style=\"color:#D9D9D9\">●</span> Tổng dự kiến: <b>' + 
+               Highcharts.numberFormat(gtri_dk, 0, '.', ',') + 
+             '</b> ~ Số HĐ DK: <b>' + so_hd_dk + '</b><br/>';
+
+        s += '<span style=\"color:#C84309\">●</span> QT tháng ", thang_n, ": <b>' + 
+               Highcharts.numberFormat(gtri_dt, 0, '.', ',') + 
+             '</b> ~ Số HĐ QT: <b>' + so_hd_dt + '</b><br/>';
+
+        s += '<span style=\"color:#645889\">●</span> Tỷ lệ (%): <b>' + ty_le + '</b>';
+
+        return s;
+      }
+    "))
+  ) %>%
+  hc_colors(c("#D9D9D9", "#C84309","#645889")) %>%
+  hc_legend(labels = list(style = list(color = "black", fontWeight = "bold",fontFamily = "cambria",fontSize = "20px"))) %>%
+  hc_exporting(
+    enabled = TRUE,
+    filename = "custom-file-name"
+    )
+
+onRender(hc, paste0("
+function(el, x) {
+  var groups  = ", am_groups_json, ";
+  var N       = ", n_total, ";
+  var nGroups = groups.am.length;
+
+  function tryDraw() {
+    /* Lấy chart qua container ID — không dùng Highcharts.charts index */
+    var container = el.querySelector('.highcharts-container');
+    if (!container) { setTimeout(tryDraw, 200); return; }
+
+    var chart = null;
+    for (var i = 0; i < Highcharts.charts.length; i++) {
+      var c = Highcharts.charts[i];
+      if (c && c.renderTo && el.contains(c.renderTo)) {
+        chart = c;
+        break;
+      }
+    }
+    if (!chart || !chart.plotWidth || chart.plotWidth === 0) {
+      setTimeout(tryDraw, 200); return;
+    }
+
+    var pLeft  = chart.plotLeft;
+    var pRight = chart.chartWidth - pLeft - chart.plotWidth;
+    var colW   = chart.plotWidth / N;
+    var pullUp = chart.marginBottom - 25;
+
+    el.style.position = 'relative';
+
+    /* Xóa element cũ nếu re-render */
+    var old = el.querySelectorAll('._am_sep, ._am_row');
+    old.forEach(function(o) { o.parentNode.removeChild(o); });
+
+    /* Đường dọc nét đứt */
+    var cumCols = 0;
+    for (var i = 0; i < nGroups - 1; i++) {
+      cumCols += groups.n_cols[i];
+      var sepX = pLeft + cumCols * colW;
+      var sep  = document.createElement('div');
+      sep.className = '_am_sep';
+      sep.style.cssText = [
+        'position:absolute',
+        'left:'   + Math.round(sepX) + 'px',
+        'top:'    + chart.plotTop + 'px',
+        'width:1px',
+        'height:' + (chart.plotHeight + 18) + 'px',
+        'border-left:1px dashed #999999',
+        'pointer-events:none',
+        'z-index:3'
+      ].join(';');
+      el.appendChild(sep);
+    }
+
+    /* Flex row label AM */
+    var row = document.createElement('div');
+    row.className = '_am_row';
+    row.style.cssText = [
+      'display:flex',
+      'margin-top:-' + pullUp + 'px',
+      'padding-left:' + pLeft + 'px',
+      'padding-right:' + pRight + 'px',
+      'width:' + chart.chartWidth + 'px',
+      'box-sizing:border-box',
+      'pointer-events:none'
+    ].join(';');
+
+    for (var j = 0; j < nGroups; j++) {
+      var cell = document.createElement('div');
+      cell.textContent = groups.am[j];
+      cell.style.cssText = [
+        'flex:' + groups.n_cols[j],
+        'text-align:center',
+        'font-size:12px',
+        'font-family:Cambria,serif',
+        'font-weight:bold',
+        'color:#333333',
+        'border-top:2px solid #555555',
+        'padding-top:4px'
+      ].join(';');
+      row.appendChild(cell);
+    }
+    el.appendChild(row);
+  }
+
+  /* Thử nhiều lần với delay tăng dần — đảm bảo chạy cả Netlify */
+  setTimeout(tryDraw, 300);
+  setTimeout(tryDraw, 800);
+  setTimeout(tryDraw, 1500);
+}
+"))
+
+```
+
+

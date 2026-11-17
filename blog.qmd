@@ -1,0 +1,288 @@
+---
+title: "Báo cáo B2B phòng Triển khai"
+format:
+  html:
+    page-layout: full
+css: styles.css
+date: '`r format(Sys.Date(), "%d/%m/%Y")`'
+---
+
+<style type="text/css">
+  body{
+  font-size: 13pt;
+  font-family: Serif
+}
+</style>
+
+<style type="text/css">
+.main-container {
+  max-width: 80% !important;
+  margin: auto;
+}
+</style>
+
+```{r, warning=FALSE, message=FALSE, results = 'hide', echo = FALSE}
+#library(plyr)
+library(dplyr)
+library(ggplot2)
+library(repr)
+library(dplyr)
+library(DT)
+library(highcharter)
+library(shiny)
+#library(shinydashboard)
+library(tidyr)
+library(stringr)
+library(dplyr)
+library(tidyverse)
+library(formattable)
+library(scales)
+library(crosstalk)
+library(reactable)
+library(stringi)
+library(raster)
+#library(rgdal)
+library(ggthemes)
+library(ggiraph)
+library(googlesheets4)
+library(shinydashboard)
+library(shinyWidgets)
+
+```
+
+```{r, warning=FALSE, message=FALSE, results = 'hide', echo = FALSE}
+if (Sys.getenv("GCP_SERVICE_ACCOUNT") != "") {
+  # Chạy trên GitHub Actions → dùng Service Account
+  gs4_auth(path = Sys.getenv("GCP_SERVICE_ACCOUNT"))
+} else {
+  # Chạy local → đăng nhập thủ công
+  gs4_auth()
+}
+sheet_url <- "https://docs.google.com/spreadsheets/d/1ouKtO7yfM599u87xjpurXVQrdkCYARRGjyZeNq56pOQ/edit?gid=1003145783#gid=1003145783"
+b2b_tong <- read_sheet(sheet_url, sheet = "Du_an")
+b2b_tong %>%
+  mutate(Nganh_nghe = case_when(Nganh_nghe == "NLMT" ~ "NLMT",
+                                Nganh_nghe == "GPTH_Năng lượng" ~ "NLMT",
+                                TRUE ~ "Khác")) -> b2b_tong
+```
+
+
+```{r,out.width = '150%', echo = FALSE, warning=FALSE, message=FALSE}
+# =====================================================================
+#  Bảng reactable b2b_tong – nguồn việc tồn theo tiến độ
+#  Bộ lọc Nganh_nghe: chọn 1 giá trị, có thêm lựa chọn "Tổng" (= tất cả)
+#  Group by AM -> Mã tỉnh; 3 nhóm cột: Tổng HĐ / Trong hạn / Quá hạn
+# =====================================================================
+library(dplyr)
+library(reactable)
+library(crosstalk)
+library(htmltools)
+
+# ---------------------------------------------------------------------
+# 1. Chuẩn bị dữ liệu
+# ---------------------------------------------------------------------
+ds_tong <- b2b_tong %>%
+  dplyr::mutate(
+    AM         = dplyr::coalesce(as.character(AM), "(Trống)"),
+    Ma_tinh    = dplyr::coalesce(toupper(trimws(as.character(Tinh_tp))), "(Trống)"),
+    Nganh_nghe = dplyr::coalesce(trimws(as.character(Nganh_nghe)), "(Trống)"),
+    # Chuẩn hóa Tien_do: bỏ dấu, chữ thường, gộp khoảng trắng
+    # ("Quá hạn", "quá hạn ", "QUÁ HẠN", chữ dấu tổ hợp... -> "qua han")
+    td = tolower(gsub("\\s+", " ", trimws(
+           stringi::stri_trans_general(as.character(Tien_do), "Any-NFC; Latin-ASCII")))),
+    HD         = trimws(as.character(HD)),
+    nvt        = dplyr::coalesce(as.numeric(Nguon_viec_ton), 0),
+
+    # Điều kiện chung: Nguon_viec_ton > 1
+    dk_tong = nvt > 1,
+    dk_th   = dk_tong & dplyr::coalesce(grepl("trong han", td), FALSE),
+    dk_qh   = dk_tong & dplyr::coalesce(grepl("qua han",   td), FALSE),
+    co_hd   = !is.na(HD) & HD != "",
+
+    # Group 1: Tổng HĐ
+    tong_sl = as.integer(dk_tong & co_hd),
+    tong_gt = ifelse(dk_tong, nvt, 0),
+    # Group 2: Trong hạn
+    th_sl = as.integer(dk_th & co_hd),
+    th_gt = ifelse(dk_th, nvt, 0),
+    th_tl = NA_real_,                    # tỷ trọng: tính khi gộp nhóm
+    # Group 3: Quá hạn
+    qh_sl = as.integer(dk_qh & co_hd),
+    qh_gt = ifelse(dk_qh, nvt, 0),
+    qh_tl = NA_real_
+  )
+
+# Nhân đôi dữ liệu: 1 bản theo từng ngành + 1 bản gắn nhãn "Tổng"
+# -> chọn "Tổng" là xem toàn bộ, chọn 1 ngành là xem riêng ngành đó
+nganh_ds <- sort(unique(ds_tong$Nganh_nghe))
+
+df_tong <- dplyr::bind_rows(
+  ds_tong %>% dplyr::mutate(Nganh_loc = Nganh_nghe),
+  ds_tong %>% dplyr::mutate(Nganh_loc = "Tổng")
+) %>%
+  dplyr::mutate(
+    Nganh_loc = factor(Nganh_loc, levels = c("Tổng", nganh_ds)),
+    .key = as.character(dplyr::row_number())
+  ) %>%
+  dplyr::select(.key, AM, Ma_tinh,
+                tong_sl, tong_gt,
+                th_sl, th_gt, th_tl,
+                qh_sl, qh_gt, qh_tl,
+                Nganh_loc)
+
+sd_tong <- SharedData$new(df_tong, key = ~.key, group = "b2b_tong")
+
+# ---------------------------------------------------------------------
+# 2. Bộ lọc ngành nghề (chọn 1)
+# ---------------------------------------------------------------------
+bo_loc_nganh <- div(
+  style = "max-width:320px;",
+  filter_select("f_nganh", "Ngành nghề", sd_tong, ~Nganh_loc, multiple = FALSE)
+)
+
+# ---------------------------------------------------------------------
+# 3. Hàm JS dùng chung
+# ---------------------------------------------------------------------
+# Tỷ trọng khi gộp nhóm = tổng SL nhóm con / tổng SL Tổng HĐ
+ty_trong_agg <- function(tu, mau = "tong_sl") {
+  JS(sprintf("function(values, rows) {
+    var a = 0, b = 0;
+    rows.forEach(function(r) { a += Number(r['%s']) || 0; b += Number(r['%s']) || 0; });
+    return b ? a / b : null;
+  }", tu, mau))
+}
+
+# Hàng tổng trên đầu bảng (tính trên dữ liệu đang lọc)
+#   kieu = "tong"  -> cộng cột
+#   kieu = "tyle"  -> tổng cột tu / tổng cột mau, hiện dạng %
+footer_tong <- function(kieu = "tong", tu = "", mau = "tong_sl") {
+  JS(sprintf("function(column, state) {
+    function leaves(rows, out) {
+      rows.forEach(function(r) {
+        if (r._subRows && r._subRows.length) leaves(r._subRows, out); else out.push(r);
+      });
+      return out;
+    }
+    var L = leaves(state.sortedData, []);
+    function sum(id) { return L.reduce(function(a, r) { return a + (Number(r[id]) || 0); }, 0); }
+    if ('%s' === 'tyle') {
+      var b = sum('%s');
+      if (!b) return '';
+      return (sum('%s') / b * 100).toLocaleString('vi-VN', { maximumFractionDigits: 1 }) + '%%';
+    }
+    return sum(column.id).toLocaleString('vi-VN', { maximumFractionDigits: 0 });
+  }", kieu, mau, tu))
+}
+
+fmt_so  <- colFormat(separators = TRUE, digits = 0, locales = "vi-VN")
+fmt_pct <- colFormat(percent = TRUE, digits = 1, locales = "vi-VN")
+
+# Màu tiêu đề nhóm cột
+mau <- list(
+  tong = c(dam = "#f26522", nhat = "#fbd5bd"),
+  th   = c(dam = "#00953a", nhat = "#c9e6c3"),
+  qh   = c(dam = "#d32f2f", nhat = "#f6c9c9")
+)
+hd_nhat <- function(k) list(background = mau[[k]][["nhat"]], fontWeight = 700)
+
+cot_sl <- function(k) colDef(
+  name = "Số lượng", aggregate = "sum", format = fmt_so, align = "right",
+  minWidth = 90, headerStyle = hd_nhat(k), footer = footer_tong("tong")
+)
+cot_gt <- function(k) colDef(
+  name = "Giá trị", aggregate = "sum", format = fmt_so, align = "right",
+  minWidth = 150, headerStyle = hd_nhat(k), footer = footer_tong("tong")
+)
+cot_tl <- function(k, tu) colDef(
+  name = "Tỷ trọng", aggregate = ty_trong_agg(tu), format = fmt_pct, align = "right",
+  minWidth = 90, headerStyle = hd_nhat(k), footer = footer_tong("tyle", tu)
+)
+nhom <- function(ten, cols, k) colGroup(
+  name = ten, columns = cols,
+  headerStyle = list(background = mau[[k]][["dam"]], color = "#fff", fontWeight = 700)
+)
+
+# ---------------------------------------------------------------------
+# 4. Bảng
+# ---------------------------------------------------------------------
+bang_tong <- reactable(
+  sd_tong,
+  groupBy = c("AM", "Ma_tinh"),
+  defaultSorted = list(tong_gt = "desc"),
+  columns = list(
+    AM = colDef(name = "AM", minWidth = 150, footer = "Tổng"),
+    Ma_tinh = colDef(
+      name = "Mã tỉnh", minWidth = 90, class = "cot-ma-tinh",
+      grouped = JS("function(cellInfo) { return cellInfo.value; }")
+    ),
+    tong_sl = cot_sl("tong"), tong_gt = cot_gt("tong"),
+    th_sl   = cot_sl("th"),   th_gt   = cot_gt("th"),   th_tl = cot_tl("th", "th_sl"),
+    qh_sl   = cot_sl("qh"),   qh_gt   = cot_gt("qh"),   qh_tl = cot_tl("qh", "qh_sl"),
+    .key      = colDef(show = FALSE),
+    Nganh_loc = colDef(show = FALSE)
+  ),
+  columnGroups = list(
+    nhom("Tổng HĐ",   c("tong_sl", "tong_gt"),        "tong"),
+    nhom("Trong hạn", c("th_sl", "th_gt", "th_tl"),   "th"),
+    nhom("Quá hạn",   c("qh_sl", "qh_gt", "qh_tl"),   "qh")
+  ),
+  # Ẩn dòng chi tiết -> Mã tỉnh là cấp cuối
+  rowClass = JS("function(rowInfo) { return rowInfo.level >= 2 ? 'an-chi-tiet' : null; }"),
+  # Chỉ hàng AM in đậm
+  rowStyle = JS("function(rowInfo) {
+    return { fontWeight: rowInfo.level === 0 ? 700 : 400 };
+  }"),
+  bordered = TRUE, striped = TRUE, highlight = TRUE, compact = TRUE,
+  defaultPageSize = 20, showPageSizeOptions = TRUE,
+  theme = reactableTheme(
+    headerStyle = list(background = "#f3f6fa", fontWeight = 600),
+    rowHighlightStyle = list(background = "#fde4cc"),
+    footerStyle = list(background = "#fff4c2", color = "#c00000", fontWeight = 700)
+  ),
+  class = "bang-b2b"
+)
+
+# ---------------------------------------------------------------------
+# 5. CSS + JS
+# ---------------------------------------------------------------------
+css_tong <- tags$style(HTML("
+  .an-chi-tiet { display: none !important; }
+  .cot-ma-tinh .rt-expander { display: none; }
+  .cot-ma-tinh.rt-td-expandable { cursor: default; }
+  .bang-b2b .rt-table { display: flex; flex-direction: column; }
+  .bang-b2b .rt-thead { order: 0; }
+  .bang-b2b .rt-tfoot { order: 1; border-bottom: 2px solid #e0c97a; }
+  .bang-b2b .rt-tbody { order: 2; }
+  .bang-b2b .rt-tfoot .rt-td { border-top: none; }
+  .bang-b2b .rt-th-group { text-align: center; }
+"))
+
+# Mặc định chọn "Tổng"; không cho để trống (tránh cộng trùng 2 lần)
+js_nganh <- HTML("
+(function () {
+  function init() {
+    var el = document.getElementById('f_nganh');
+    var sel = el && el.querySelector('select');
+    if (!sel || !sel.selectize) { setTimeout(init, 200); return; }
+    var s = sel.selectize;
+    s.on('change', function (v) { if (!v) s.setValue('Tổng'); });
+    if (!s.getValue()) s.setValue('Tổng');
+  }
+  if (document.readyState === 'complete') init();
+  else window.addEventListener('load', init);
+})();
+")
+
+browsable(tagList(
+  css_tong,
+  bo_loc_nganh,
+  tags$div(style = "height:12px"),
+  bang_tong,
+  tags$script(js_nganh)
+))
+```
+
+
+
+
+

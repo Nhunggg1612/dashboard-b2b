@@ -1,0 +1,12 @@
+---
+title: "Welcome"
+date: 2025-08-18
+categories: [intro]
+---
+
+This is a starter post. You can include R code chunks:
+
+```{r}
+x <- c(1,2,3,4,5)
+mean(x)
+```
