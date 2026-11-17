@@ -270,11 +270,20 @@ bang_ct <- reactable(
   groupBy = c("AM", "Tinh_tp"),
   defaultSorted = list(Gia_tri_du_kien_doanh_thu = "desc"),
   columns = list(
-    AM      = colDef(name = "AM", minWidth = 150, footer = "Tổng"),
-    Tinh_tp = colDef(name = "Tỉnh/TP", minWidth = 100),
-    GD      = colDef(name = "GD", minWidth = 100),
+    AM      = colDef(name = "AM", minWidth = 150, footer = "Tổng",
+                     sticky = "left", class = "cot-dinh",
+                     headerClass = "cot-dinh-hd", footerClass = "cot-dinh-ft"),
+    Tinh_tp = colDef(name = "Tỉnh/TP", minWidth = 100,
+                     sticky = "left", class = "cot-dinh",
+                     headerClass = "cot-dinh-hd", footerClass = "cot-dinh-ft"),
+    GD      = colDef(name = "GD", minWidth = 100,
+                     sticky = "left", class = "cot-dinh",
+                     headerClass = "cot-dinh-hd", footerClass = "cot-dinh-ft"),
     HD      = colDef(name = "Hợp đồng", minWidth = 180,
-                     aggregate = dem_khong_rong, footer = tong_js("dem")),
+                     aggregate = dem_khong_rong, footer = tong_js("dem"),
+                     sticky = "left", class = "cot-dinh cot-dinh-cuoi",
+                     headerClass = "cot-dinh-hd cot-dinh-cuoi",
+                     footerClass = "cot-dinh-ft cot-dinh-cuoi"),
     Khac_hang = colDef(name = "Khách hàng", minWidth = 180),
     Vuong     = colDef(name = "Vướng", minWidth = 90),
     Noi_dung_vuong_chi_tiet = colDef(name = "Nội dung vướng chi tiết", minWidth = 260),
@@ -309,7 +318,7 @@ bang_ct <- reactable(
     rowHighlightStyle = list(background = "#fde4cc"),
     footerStyle = list(background = "#fff4c2", color = "#c00000", fontWeight = 700)
   ),
-  class = "bang-b2b"
+  class = "bang-b2b bang-ct"
 )
 
 # ---------------------------------------------------------------------
@@ -408,6 +417,13 @@ css_bang <- tags$style(HTML("
 
   /* Tên bộ lọc: đỏ, đậm */
   .bo-loc-b2b label { color: #c00000 !important; font-weight: 700 !important; }
+  /* Bảng chi tiết: 4 cột cố định khi cuộn ngang */
+  .bang-ct .cot-dinh    { background: #ffffff; }
+  .bang-ct .rt-tr-striped .cot-dinh { background: #f7f7f7; }
+  .bang-ct .rt-tr-highlight:hover .cot-dinh { background: #fde4cc; }
+  .bang-ct .cot-dinh-hd { background: #f3f6fa; }
+  .bang-ct .cot-dinh-ft { background: #fff4c2; }
+  .bang-ct .cot-dinh-cuoi { border-right: 2px solid #d0d0d0 !important; }
 "))
 
 browsable(tagList(
