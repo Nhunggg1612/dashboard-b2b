@@ -586,8 +586,13 @@ function(el, x) {
 
   function draw(chart) {
     var container = chart.container;
-    var offTop  = container.offsetTop;
-    var offLeft = container.offsetLeft;
+
+    /* Đặt relative TRƯỚC, rồi mới đo vị trí khung chart so với el */
+    el.style.position = 'relative';
+    var rEl  = el.getBoundingClientRect();
+    var rCt  = container.getBoundingClientRect();
+    var offTop  = rCt.top  - rEl.top;
+    var offLeft = rCt.left - rEl.left;
 
     var pLeft  = chart.plotLeft;
     var pRight = chart.chartWidth - pLeft - chart.plotWidth;
@@ -597,7 +602,6 @@ function(el, x) {
     var lb    = chart.xAxis[0].labelGroup.getBBox();
     var yRow  = lb.y + lb.height + GAP;
 
-    el.style.position = 'relative';
     el.querySelectorAll('._am_sep, ._am_row').forEach(function(o) { o.remove(); });
 
     /* Đường dọc nét đứt: từ đỉnh vùng vẽ xuống tới thanh AM */
@@ -827,8 +831,13 @@ function(el, x) {
 
   function draw(chart) {
     var container = chart.container;
-    var offTop  = container.offsetTop;
-    var offLeft = container.offsetLeft;
+
+    /* Đặt relative TRƯỚC, rồi mới đo vị trí khung chart so với el */
+    el.style.position = 'relative';
+    var rEl  = el.getBoundingClientRect();
+    var rCt  = container.getBoundingClientRect();
+    var offTop  = rCt.top  - rEl.top;
+    var offLeft = rCt.left - rEl.left;
 
     var pLeft  = chart.plotLeft;
     var pRight = chart.chartWidth - pLeft - chart.plotWidth;
@@ -838,7 +847,6 @@ function(el, x) {
     var lb    = chart.xAxis[0].labelGroup.getBBox();
     var yRow  = lb.y + lb.height + GAP;
 
-    el.style.position = 'relative';
     el.querySelectorAll('._am_sep, ._am_row').forEach(function(o) { o.remove(); });
 
     /* Đường dọc nét đứt: từ đỉnh vùng vẽ xuống tới thanh AM */
