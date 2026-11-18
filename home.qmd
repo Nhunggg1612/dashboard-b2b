@@ -415,54 +415,43 @@ hc <- highchart() %>%
                      list(showLastLabel = TRUE, opposite = TRUE, 
                           title = list(text = "%HT", style=list(fontWeight = "bold",fontSize = "15px",fontFamily = "cambria")), 
                           labels = list(style=list(fontSize = "12px",fontFamily = "cambria")))) %>%
-  hc_add_series(name = "Tổng DK", 
-                data = lapply(seq_along(bc_dt$gtri_dk), function(i) {
-      list(y = round(bc_dt$gtri_dk[i], 0),
-           so_hd_ton = bc_dt$so_hd_dk[i])
-    }),
-                states = list(
-      hover = list(color = "#808080")  # trắng khi hover
-    ),
-                tooltip = list(columnFormat = paste0("Kế hoạch", "\n",accounting(bc_dt$gtri_dk, big.mark = ",", digits = 2L, format = "d"), "TTQH"))) %>%
+  hc_add_series(name = "Tổng DK",
+                data = lapply(seq_len(nrow(bc_dt)), function(i) {
+                  list(y = bc_dt$gtri_dk[i], so_hd_dk = bc_dt$so_hd_dk[i])
+                }),
+                states = list(hover = list(color = "#808080"))) %>%
   hc_add_series(name = paste0("QT tháng ", thang_n),
-                data = lapply(seq_along(bc_dt$gtri_dt), function(i) {
-      list(y = round(bc_dt$gtri_dt[i], 0),
-           so_hd_dk = bc_dt$so_hd_dt[i])
-    }),
-                states = list(
-      hover = list(color = "#8DB600")  # xanh lá mạ khi hover
-    )) %>%
+                data = lapply(seq_len(nrow(bc_dt)), function(i) {
+                  list(y = bc_dt$gtri_dt[i], so_hd_dt = bc_dt$so_hd_dt[i])
+                }),
+                states = list(hover = list(color = "#8DB600"))) %>%
   hc_add_series(name = "Tỷ lệ (%)",data = round(bc_dt$ty_le,0), type = "spline", yAxis = 1,dataLabels = list(enabled = TRUE, format = "{y}%")) %>%
   hc_tooltip(
     shared = TRUE,
     useHTML = TRUE,
-    # ✅ Bọc toàn bộ JS() bằng paste0() để R điền thang_n vào trước khi render
     formatter = JS(paste0("
-      function() {
-        var s = '<b>' + this.x + '</b><br/>';
+      function () {
+        var pts = this.points || [this];
+        var gtri_dk = 0, gtri_dt = 0, ty_le = null, so_hd_dk = 0, so_hd_dt = 0, ten = '';
 
-        var gtri_dk = 0, gtri_dt = 0, ty_le = 0, so_hd_dk = 0, so_hd_dt = 0;
+        pts.forEach(function (p) {
+          var pt = p.point || p;
+          ten = pt.category;
+          switch (p.series.index) {
+            case 0: gtri_dk = pt.y; so_hd_dk = pt.so_hd_dk || 0; break;
+            case 1: gtri_dt = pt.y; so_hd_dt = pt.so_hd_dt || 0; break;
+            case 2: ty_le   = pt.y; break;
+          }
+        });
 
-        for (var i = 0; i < this.points.length; i++) {
-          var name = this.points[i].series.name;
-          var pt   = this.points[i].point;
-          var val  = this.points[i].y;
-
-          if (name === 'Tổng dự kiến')              { gtri_dk  = val; so_hd_dk = pt.so_hd_dk; }
-          if (name === 'QT tháng ", thang_n, "') { gtri_dt = val; so_hd_dt    = pt.so_hd_dt; }
-          if (name === 'Tỷ lệ (%)')                   ty_le    = val;
-        }
-
-        s += '<span style=\"color:#D9D9D9\">●</span> Tổng dự kiến: <b>' + 
-               Highcharts.numberFormat(gtri_dk, 0, '.', ',') + 
+        var f = function (v) { return Highcharts.numberFormat(v, 0, ',', '.'); };
+        var s = '<b>' + ten + '</b><br/>';
+        s += '<span style=\"color:#D9D9D9\">●</span> Tổng dự kiến: <b>' + f(gtri_dk) +
              '</b> ~ Số HĐ DK: <b>' + so_hd_dk + '</b><br/>';
-
-        s += '<span style=\"color:#C84309\">●</span> QT tháng ", thang_n, ": <b>' + 
-               Highcharts.numberFormat(gtri_dt, 0, '.', ',') + 
+        s += '<span style=\"color:#C84309\">●</span> QT tháng ", thang_n, ": <b>' + f(gtri_dt) +
              '</b> ~ Số HĐ QT: <b>' + so_hd_dt + '</b><br/>';
-
-        s += '<span style=\"color:#645889\">●</span> Tỷ lệ (%): <b>' + ty_le + '</b>';
-
+        s += '<span style=\"color:#645889\">●</span> Tỷ lệ: <b>' +
+             (ty_le === null ? '–' : ty_le + '%') + '</b>';
         return s;
       }
     "))
@@ -586,10 +575,32 @@ b2b_GD_dt <- b2b_GD %>%
   ) %>%
   dplyr::filter(.thang_date >= as.Date("2026-01-01")) %>%
   dplyr::select(-.thang_date)
+
 b2b_GD_dt %>%
   group_by(Thang_tinh_doanh_thu, Tinh_tp, AM) %>%
   summarise(gtri_dt = round(sum(Gia_quyet_toan_truoc_vat[!is.na(HD)], na.rm = TRUE)/10^6,0),
-            so_hd_dt = sum(!is.na(HD), na.rm = TRUE)) -> xuhuong_dt
+            so_hd_dt = sum(!is.na(HD), na.rm = TRUE)
+            ) -> xuhuong_dt
+
+#########################################################
+b2b_GD_dk <- b2b_GD %>%
+  dplyr::mutate(
+    .thang_date = as.Date(paste0("01/", Ke_hoach_doanh_thu), format = "%d/%m/%Y")
+  ) %>%
+  dplyr::filter(.thang_date >= as.Date("2026-01-01")) %>%
+  dplyr::select(-.thang_date)
+
+b2b_GD_dk %>%
+  group_by(Ke_hoach_doanh_thu, Tinh_tp, AM) %>%
+  summarise(gtri_dk = round(sum(Gia_tri_du_kien_doanh_thu[!is.na(HD)], na.rm = TRUE)/10^6,0),
+            so_hd_dk = sum(!is.na(HD), na.rm = TRUE),
+            ) -> xuhuong_dk
+
+xuhuong_dk <- xuhuong_dk %>% dplyr::rename(Thang_tinh_doanh_thu = Ke_hoach_doanh_thu)
+
+xuhuong_dt <- left_join(xuhuong_dk, xuhuong_dt, by = c("Thang_tinh_doanh_thu", "Tinh_tp", "AM"))
+
+xuhuong_dt[is.na(xuhuong_dt)] <- 0
 
 ```
 
@@ -604,12 +615,16 @@ library(jsonlite)
 # ---------------------------------------------------------------------
 dl <- as.data.frame(dplyr::ungroup(xuhuong_dt))
 
+so0 <- function(x) ifelse(is.na(x), 0, as.numeric(x))
+
 dl$Thang    <- trimws(as.character(dl$Thang_tinh_doanh_thu))
 dl$ngay     <- as.Date(paste0("01/", dl$Thang), format = "%d/%m/%Y")
 dl$AM       <- ifelse(is.na(dl$AM), "(Trống)", as.character(dl$AM))
 dl$Tinh_tp  <- ifelse(is.na(dl$Tinh_tp), "(Trống)", toupper(trimws(as.character(dl$Tinh_tp))))
-dl$gtri_dt  <- ifelse(is.na(dl$gtri_dt), 0, as.numeric(dl$gtri_dt))
-dl$so_hd_dt <- ifelse(is.na(dl$so_hd_dt), 0, as.numeric(dl$so_hd_dt))
+dl$gtri_dk  <- so0(dl$gtri_dk)
+dl$so_hd_dk <- so0(dl$so_hd_dk)
+dl$gtri_dt  <- so0(dl$gtri_dt)
+dl$so_hd_dt <- so0(dl$so_hd_dt)
 dl <- dl[!is.na(dl$ngay), ]
 
 # Trục x: các tháng sắp theo thời gian
@@ -617,7 +632,7 @@ thang_df   <- unique(dl[, c("Thang", "ngay")])
 thang_cats <- thang_df$Thang[order(thang_df$ngay)]
 
 json_data <- jsonlite::toJSON(
-  dl[, c("Thang", "AM", "Tinh_tp", "gtri_dt", "so_hd_dt")],
+  dl[, c("Thang", "AM", "Tinh_tp", "gtri_dk", "so_hd_dk", "gtri_dt", "so_hd_dt")],
   dataframe = "rows", auto_unbox = TRUE
 )
 json_cats <- jsonlite::toJSON(thang_cats)
@@ -625,35 +640,47 @@ json_cats <- jsonlite::toJSON(thang_cats)
 # ---------------------------------------------------------------------
 # 2. Biểu đồ
 # ---------------------------------------------------------------------
+nhan_so <- JS("function () {
+  return this.y ? Highcharts.numberFormat(this.y, 0, ',', '.') : '';
+}")
+
 hc_xh <- highchart(elementId = "hc_xuhuong") %>%
   hc_chart(type = "spline") %>%
-  hc_xAxis(categories = thang_cats, title = list(text = "Tháng tính DT")) %>%
+  hc_xAxis(categories = thang_cats, title = list(text = "Tháng tính DT"),
+           crosshair = list(color = "rgba(180,180,180,0.25)")) %>%
   hc_yAxis(
-    title  = list(text = "Giá trị DT (triệu đồng)"),
+    min = 0,
+    title  = list(text = "Giá trị (triệu đồng)"),
     labels = list(formatter = JS("function(){ return Highcharts.numberFormat(this.value, 0, ',', '.'); }"))
   ) %>%
-  hc_add_series(name = "Giá trị DT", data = rep(0, length(thang_cats)),
-                color = "#f26522", marker = list(enabled = TRUE, radius = 4)) %>%
-  hc_plotOptions(
-    spline = list(
-      dataLabels = list(
-        enabled   = TRUE,
-        formatter = JS("function () {
-          return this.y ? Highcharts.numberFormat(this.y, 0, ',', '.') : '';
-        }"),
-        style = list(fontSize = "11px", fontWeight = "600",
-                     color = "#c00000", textOutline = "none"),
-        y = -6
-      )
-    )
-  ) %>%
-  hc_tooltip(useHTML = TRUE, formatter = JS("function () {
-    var p = this.point;
-    return '<b>' + p.tinh + '</b> - Tháng lên DT <b>' + p.category + '</b><br/>' +
-           Highcharts.numberFormat(p.n, 0, ',', '.') + ' hợp đồng _ ' +
-           Highcharts.numberFormat(p.y, 0, ',', '.') + ' triệu đồng';
+  # Series 0: Dự kiến
+  hc_add_series(name = "Dự kiến", data = rep(0, length(thang_cats)),
+                color = "#f26522", dashStyle = "ShortDash",
+                marker = list(enabled = TRUE, radius = 4),
+                dataLabels = list(enabled = TRUE, formatter = nhan_so, y = -6,
+                                  style = list(fontSize = "11px", fontWeight = "600",
+                                               color = "#f26522", textOutline = "none"))) %>%
+  # Series 1: Đã lên doanh thu
+  hc_add_series(name = "Đã lên DT", data = rep(0, length(thang_cats)),
+                color = "#645889",
+                marker = list(enabled = TRUE, radius = 4),
+                dataLabels = list(enabled = TRUE, formatter = nhan_so, y = -6,
+                                  style = list(fontSize = "11px", fontWeight = "600",
+                                               color = "#645889", textOutline = "none"))) %>%
+  hc_tooltip(shared = TRUE, useHTML = TRUE, formatter = JS("function () {
+    var pts = this.points || [this];
+    var f = function (v) { return Highcharts.numberFormat(v || 0, 0, ',', '.'); };
+    var p0 = pts[0].point || pts[0];
+    var s = '<b>' + p0.tinh + '</b> - Tháng <b>' + p0.category + '</b><br/>';
+    pts.forEach(function (p) {
+      var pt = p.point || p;
+      var ten = p.series.index === 0 ? 'Dự kiến' : 'Đã lên doanh thu';
+      s += '<span style=\"color:' + p.series.color + '\">●</span> ' + ten + ' <b>' +
+           f(pt.n) + '</b> hợp đồng _ <b>' + f(pt.y) + '</b> triệu đồng<br/>';
+    });
+    return s;
   }")) %>%
-  hc_legend(enabled = FALSE) %>%
+  hc_legend(enabled = TRUE) %>%
   hc_credits(enabled = FALSE)
 
 # ---------------------------------------------------------------------
@@ -669,7 +696,7 @@ bo_loc_xh <- div(
 )
 
 # ---------------------------------------------------------------------
-# 4. JS: lọc liên động + vẽ lại đường
+# 4. JS: lọc liên động + vẽ lại 2 đường
 # ---------------------------------------------------------------------
 js_xh <- HTML(paste0("
 (function () {
@@ -700,7 +727,6 @@ js_xh <- HTML(paste0("
     });
   }
 
-  // Bộ lọc Tỉnh/TP = tập con theo AM đang chọn
   function capNhatTinh() {
     var am = selAm.value;
     var rows = DATA.filter(function (r) { return am === ALL || r.AM === am; });
@@ -715,16 +741,22 @@ js_xh <- HTML(paste0("
     DATA.forEach(function (r) {
       if (am !== ALL && r.AM !== am) return;
       if (tinh !== ALL && r.Tinh_tp !== tinh) return;
-      var a = agg[r.Thang] || (agg[r.Thang] = { y: 0, n: 0 });
-      a.y += Number(r.gtri_dt) || 0;
-      a.n += Number(r.so_hd_dt) || 0;
+      var a = agg[r.Thang] || (agg[r.Thang] = { ydk: 0, ndk: 0, ydt: 0, ndt: 0 });
+      a.ydk += Number(r.gtri_dk)  || 0;
+      a.ndk += Number(r.so_hd_dk) || 0;
+      a.ydt += Number(r.gtri_dt)  || 0;
+      a.ndt += Number(r.so_hd_dt) || 0;
     });
     var nhan = tinh !== ALL ? tinh : (am === ALL ? 'Tất cả tỉnh' : 'Tất cả tỉnh (' + am + ')');
-    var pts = CATS.map(function (t) {
-      var a = agg[t] || { y: 0, n: 0 };
-      return { y: a.y, n: a.n, tinh: nhan };
+    var dk = [], dt = [];
+    CATS.forEach(function (t) {
+      var a = agg[t] || { ydk: 0, ndk: 0, ydt: 0, ndt: 0 };
+      dk.push({ y: a.ydk, n: a.ndk, tinh: nhan });
+      dt.push({ y: a.ydt, n: a.ndt, tinh: nhan });
     });
-    chart.series[0].setData(pts, true);
+    chart.series[0].setData(dk, false);
+    chart.series[1].setData(dt, false);
+    chart.redraw();
   }
 
   function init() {
