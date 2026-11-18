@@ -120,11 +120,17 @@ df_tong <- dplyr::bind_rows(
   ds_tong %>% dplyr::mutate(Nganh_loc = Nganh_nghe),
   ds_tong %>% dplyr::mutate(Nganh_loc = "Tổng")
 ) %>%
+  # Chỉ giữ HĐ có nguồn việc tồn > 1 (dòng khác toàn số 0, không cần hiện)
+  dplyr::filter(dk_tong) %>%
   dplyr::mutate(
     Nganh_loc = factor(Nganh_loc, levels = c("Tổng", nganh_ds)),
-    .key = as.character(dplyr::row_number())
+    .key = as.character(dplyr::row_number()),
+    HD   = dplyr::if_else(co_hd, HD, "(Không số HĐ)"),
+    # Tỷ trọng ở dòng HĐ: 100% nếu HĐ thuộc nhóm đó, 0% nếu không
+    th_tl = dplyr::if_else(tong_sl > 0, th_sl / tong_sl, NA_real_),
+    qh_tl = dplyr::if_else(tong_sl > 0, qh_sl / tong_sl, NA_real_)
   ) %>%
-  dplyr::select(.key, AM, Ma_tinh,
+  dplyr::select(.key, AM, Ma_tinh, HD,
                 tong_sl, tong_gt,
                 th_sl, th_gt, th_tl,
                 qh_sl, qh_gt, qh_tl,
@@ -206,15 +212,16 @@ nhom <- function(ten, cols, k) colGroup(
 # 4. Bảng
 # ---------------------------------------------------------------------
 bang_tong <- reactable(
-  sd_tong,
+  sd_tong, width = 1550,
   groupBy = c("AM", "Ma_tinh"),
   defaultSorted = list(tong_gt = "desc"),
   columns = list(
     AM = colDef(name = "AM", minWidth = 150, footer = "Tổng"),
     Ma_tinh = colDef(
-      name = "Mã tỉnh", minWidth = 90, class = "cot-ma-tinh",
+      name = "Mã tỉnh", minWidth = 100,
       grouped = JS("function(cellInfo) { return cellInfo.value; }")
     ),
+    HD = colDef(name = "Hợp đồng", minWidth = 200),
     tong_sl = cot_sl("tong"), tong_gt = cot_gt("tong"),
     th_sl   = cot_sl("th"),   th_gt   = cot_gt("th"),   th_tl = cot_tl("th", "th_sl"),
     qh_sl   = cot_sl("qh"),   qh_gt   = cot_gt("qh"),   qh_tl = cot_tl("qh", "qh_sl"),
@@ -226,12 +233,13 @@ bang_tong <- reactable(
     nhom("Trong hạn", c("th_sl", "th_gt", "th_tl"),   "th"),
     nhom("Quá hạn",   c("qh_sl", "qh_gt", "qh_tl"),   "qh")
   ),
-  # Ẩn dòng chi tiết -> Mã tỉnh là cấp cuối
-  rowClass = JS("function(rowInfo) { return rowInfo.level >= 2 ? 'an-chi-tiet' : null; }"),
   # Chỉ hàng AM in đậm
   rowStyle = JS("function(rowInfo) {
-    return { fontWeight: rowInfo.level === 0 ? 700 : 400 };
+    if (rowInfo.level === 0) return { fontWeight: 700 };
+    if (rowInfo.level === 1) return { fontWeight: 600 };
+    return { fontWeight: 400 };
   }"),
+  
   bordered = TRUE, striped = TRUE, highlight = TRUE, compact = TRUE,
   defaultPageSize = 20, showPageSizeOptions = TRUE,
   theme = reactableTheme(
@@ -246,9 +254,6 @@ bang_tong <- reactable(
 # 5. CSS + JS
 # ---------------------------------------------------------------------
 css_tong <- tags$style(HTML("
-  .an-chi-tiet { display: none !important; }
-  .cot-ma-tinh .rt-expander { display: none; }
-  .cot-ma-tinh.rt-td-expandable { cursor: default; }
   .bang-b2b .rt-table { display: flex; flex-direction: column; }
   .bang-b2b .rt-thead { order: 0; }
   .bang-b2b .rt-tfoot { order: 1; border-bottom: 2px solid #e0c97a; }
